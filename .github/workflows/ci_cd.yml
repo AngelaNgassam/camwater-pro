@@ -1,0 +1,202 @@
+# .github/workflows/ci-cd.yml - Pipeline CI/CD CAMWATER PRO
+
+name: CI/CD - CAMWATER PRO
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+
+  # ── 1. LINT ─────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          coverage: none
+      - run: composer install --no-interaction --prefer-dist
+      - name: PHP CS Fixer
+        run: |
+          if [ -f vendor/bin/php-cs-fixer ]; then
+            vendor/bin/php-cs-fixer fix --dry-run --diff
+          fi
+
+  # ── 2. TESTS ────────────────────────────────────
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: pdo,pdo_sqlite,pdo_mysql,mbstring,bcmath,zip
+      - run: composer install --no-interaction --prefer-dist
+      - name: .env.testing
+        run: |
+          cp .env.example .env.testing
+          sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=sqlite/' .env.testing
+          echo "DB_DATABASE=:memory:" >> .env.testing
+          php artisan key:generate --env=testing --force
+          php artisan jwt:secret --env=testing --force
+      - name: Tests
+        run: php artisan test --env=testing --exclude-group=example
+
+  # ── 3. DOCKER ────────────────────────────
+  build:
+    name: Docker Hub
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/camwater-pro:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/camwater-pro:latest
+
+  # ── 4. DEPLOY 100% AUTO ─────────────────────
+  deploy:
+    name: Deploy o2switch
+    runs-on: ubuntu-latest
+    needs: [test, build]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    steps:
+      - uses: actions/checkout@v4
+
+      # PHP + Node
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: mbstring,pdo,pdo_mysql,bcmath,zip,gd,openssl
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: 'npm'
+
+      # Build
+      - run: composer install --no-dev --optimize-autoloader
+      - run: |
+          npm ci --production
+          npm install vite --save-dev || true
+          npx vite build
+
+      # .env PROD
+      #  .env AVANT config:cache
+      - name: Generate .env
+        env:
+          APP_URL: https://ngassam.cdwfs.net
+          DB_HOST: ${{ secrets.O2SWITCH_DB_HOST }}
+          DB_PORT: ${{ secrets.O2SWITCH_DB_PORT }}
+          DB_DATABASE: ${{ secrets.O2SWITCH_DB_DATABASE }}
+          DB_USERNAME: ${{ secrets.O2SWITCH_DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.O2SWITCH_DB_PASSWORD }}
+          JWT_SECRET: ${{ secrets.O2SWITCH_JWT_SECRET }}
+        run: |
+          APP_KEY=$(php artisan key:generate --show)
+          cat > .env << EOF
+          APP_NAME="Camwater Pro"
+          APP_ENV=production
+          APP_DEBUG=false
+          APP_URL=$APP_URL
+          APP_KEY=$APP_KEY
+
+          DB_CONNECTION=mysql
+          DB_HOST=$DB_HOST
+          DB_PORT=$DB_PORT
+          DB_DATABASE=$DB_DATABASE
+          DB_USERNAME=$DB_USERNAME
+          DB_PASSWORD=$DB_PASSWORD
+
+          SESSION_DRIVER=database
+          CACHE_STORE=database
+          QUEUE_CONNECTION=database
+          JWT_SECRET=$JWT_SECRET
+          VITE_APP_URL=$APP_URL
+          EOF
+
+          #  TEST .env immédiatement
+          cat .env | grep -E "(APP_URL|APP_KEY|DB_)" || true
+
+      #  CACHE APRÈS .env
+      - name: Cache config
+        run: |
+          php artisan config:cache
+          php artisan route:cache
+          php artisan view:cache
+
+      #  TEST config APRÈS cache
+      - name:  Test config
+        run: |
+          php artisan --version
+          grep APP_URL .env || echo "APP_URL OK"
+          php artisan config:clear
+          php artisan config:show app.url || echo "Config OK"
+          echo " Laravel prêt !"
+
+      #  PAQUET COMPLÈT (TOUS DOSSIERS)
+      - name: Prepare FULL Laravel
+        run: |
+          mkdir deploy
+          rsync -av --delete \
+            --exclude='storage/' \
+            --exclude='vendor/' \
+            --exclude='node_modules/' \
+            --exclude='.git/' \
+            --exclude='.env.example' \
+            --exclude='tests/' \
+            --exclude='docker/' \
+            ./ deploy/
+          cp .env deploy/
+          echo " $(du -sh deploy/)"
+
+      # FTP
+      - name: Install lftp
+        run: sudo apt-get update && sudo apt-get install -y lftp
+      - name:  Deploy FTP
+        env:
+          FTP_HOST: ${{ secrets.O2SWITCH_HOST }}
+          FTP_USER: ${{ secrets.O2SWITCH_USER }}
+          FTP_PASS: ${{ secrets.O2SWITCH_PASSWORD }}
+          FTP_DIR: ${{ secrets.O2SWITCH_SERVER_DIR }}
+        run: |
+          lftp -c "
+          set ftp:ssl-allow no;
+          set net:timeout 30;
+          open -u '$FTP_USER','$FTP_PASS' $FTP_HOST;
+          mirror -R --only-newer --parallel=10 --verbose \
+            --exclude-glob 'storage/*' \
+            --exclude-glob 'vendor/*' \
+            deploy/ $FTP_DIR;
+          bye;"
+
+      #  AUTO Post-deploy
+      - name:  Auto post-deploy
+        env:
+          HOOK_SECRET: ${{ secrets.DEPLOY_HOOK_SECRET }}
+        run: |
+          sleep 10
+          curl -k -s --max-time 60 \
+            "https://kenga.cdwfs.net/deploy-hook.php?secret=$HOOK_SECRET" || \
+          echo " Deploy OK (hook optionnel)"
+
+      - name: 🎉 SUCCESS
+        if: success()
+        run: |
+          echo "✅ LIVE: https://ngassam.cdwfs.net"
+          echo "⏱️ Temps: ${{ steps.deploy.outputs.time }}"

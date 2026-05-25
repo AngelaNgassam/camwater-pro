@@ -1,0 +1,381 @@
+openapi: 3.0.0
+
+# ============================================================
+# CAMWATER PRO API — Spécification OpenAPI 3.0
+# Documentation officielle de l'API
+# ============================================================
+
+info:
+  title: CAMWATER PRO API
+  version: "1.0.0"
+  description: |
+    API back-end pour la gestion des abonnements, de la facturation
+    et des réclamations de CAMWATER PRO.
+    Société de distribution d'eau opérant à Yaoundé, Douala,
+    Bafoussam et Garoua (80 000 abonnés actifs).
+  contact:
+    name: Équipe Informatique CAMWATER PRO
+    email: info@camwater.cm
+
+servers:
+  - url: http://localhost:8000/api
+    description: Serveur de développement local
+
+# ── Schéma de sécurité JWT ────────────────────────────────────────────────────
+security:
+  - bearerAuth: []
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Token JWT obtenu via POST /auth/login.
+        À envoyer dans le header : Authorization: Bearer <token>
+
+  # ── Schémas réutilisables ───────────────────────────────────────────────────
+  schemas:
+
+    Abonne:
+      type: object
+      properties:
+        id:              { type: integer, example: 1 }
+        nom:             { type: string,  example: "MBARGA" }
+        prenom:          { type: string,  example: "Jean" }
+        ville:           { type: string,  enum: [Yaoundé, Douala, Bafoussam, Garoua] }
+        quartier:        { type: string,  example: "Bastos" }
+        numero_compteur: { type: string,  example: "YDE-DOM-001" }
+        type_abonnement: { type: string,  enum: [Domestique, Professionnel] }
+        created_at:      { type: string,  format: date-time }
+
+    Facture:
+      type: object
+      properties:
+        id:            { type: integer, example: 1 }
+        abonne_id:     { type: integer, example: 1 }
+        consommation:  { type: integer, example: 15, description: "En m³" }
+        montant_total: { type: integer, example: 6250, description: "En FCFA" }
+        date_emission: { type: string,  format: date, example: "2025-06-10" }
+        statut:        { type: string,  enum: [Emise, Payée] }
+
+    Reclamation:
+      type: object
+      properties:
+        id:           { type: integer, example: 1 }
+        facture_id:   { type: integer, example: 1 }
+        description:  { type: string,  example: "Le montant facturé est incorrect." }
+        statut:       { type: string,  enum: [En attente, En cours, Résolue] }
+        reponse:      { type: string,  nullable: true }
+        operateur_id: { type: integer, nullable: true }
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:    { type: string, example: "error" }
+        code:      { type: integer, example: 401 }
+        message:   { type: string, example: "Token manquant ou invalide." }
+        timestamp: { type: string, format: date-time }
+
+# ── Définition des routes ─────────────────────────────────────────────────────
+paths:
+
+  /auth/login:
+    post:
+      tags: [Authentification]
+      summary: Connexion d'un opérateur
+      description: |
+        Vérifie les identifiants et retourne un token JWT valide 2 heures.
+        Limité à 5 tentatives par minute par IP.
+      security: []   # Route publique — pas de token requis
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [login, password]
+              properties:
+                login:    { type: string, example: "admin@camwater.cm" }
+                password: { type: string, example: "Admin123!" }
+      responses:
+        "200":
+          description: Connexion réussie — token JWT retourné
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:  { type: string, example: "success" }
+                  token:   { type: string, example: "eyJhbGci..." }
+                  operateur:
+                    type: object
+                    properties:
+                      id:   { type: integer }
+                      nom:  { type: string }
+                      role: { type: string, enum: [admin, gestionnaire] }
+        "401":
+          description: Identifiants incorrects
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "429":
+          description: Trop de tentatives (rate limiting)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /auth/logout:
+    post:
+      tags: [Authentification]
+      summary: Déconnexion — invalide le token
+      description: Ajoute le token à la liste noire (base de données).
+      responses:
+        "200":
+          description: Déconnexion réussie
+        "401":
+          description: Token manquant ou invalide
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /abonnes:
+    get:
+      tags: [Abonnés]
+      summary: Lister tous les abonnés (paginé, 20 par page)
+      responses:
+        "200":
+          description: Liste des abonnés
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Abonne' }
+        "401": { description: Non authentifié }
+
+    post:
+      tags: [Abonnés]
+      summary: Créer un nouvel abonné (admin uniquement)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nom, prenom, ville, quartier, numero_compteur, type_abonnement]
+              properties:
+                nom:             { type: string, example: "KAMGA" }
+                prenom:          { type: string, example: "Serge" }
+                ville:           { type: string, enum: [Yaoundé, Douala, Bafoussam, Garoua] }
+                quartier:        { type: string, example: "Deido" }
+                numero_compteur: { type: string, example: "DLA-DOM-010" }
+                type_abonnement: { type: string, enum: [Domestique, Professionnel] }
+      responses:
+        "201":
+          description: Abonné créé
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:    { $ref: '#/components/schemas/Abonne' }
+        "401": { description: Non authentifié }
+        "403": { description: Rôle admin requis }
+        "422":
+          description: Données invalides
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /abonnes/{id}:
+    get:
+      tags: [Abonnés]
+      summary: Consulter un abonné avec ses factures
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Abonné trouvé
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:    { $ref: '#/components/schemas/Abonne' }
+        "404": { description: Abonné introuvable }
+
+    put:
+      tags: [Abonnés]
+      summary: Modifier un abonné (admin uniquement)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nom:             { type: string }
+                prenom:          { type: string }
+                ville:           { type: string, enum: [Yaoundé, Douala, Bafoussam, Garoua] }
+                quartier:        { type: string }
+                numero_compteur: { type: string }
+                type_abonnement: { type: string, enum: [Domestique, Professionnel] }
+      responses:
+        "200": { description: Abonné mis à jour }
+        "403": { description: Rôle admin requis }
+        "404": { description: Abonné introuvable }
+
+    delete:
+      tags: [Abonnés]
+      summary: Supprimer un abonné (admin uniquement)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: Abonné supprimé }
+        "403": { description: Rôle admin requis }
+        "404": { description: Abonné introuvable }
+
+  /factures/generer:
+    post:
+      tags: [Factures]
+      summary: Générer une facture pour un abonné
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [abonne_id, consommation]
+              properties:
+                abonne_id:    { type: integer, example: 1 }
+                consommation: { type: integer, example: 15, description: "En m³, doit être > 0" }
+      responses:
+        "201":
+          description: Facture générée avec le montant calculé
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:    { $ref: '#/components/schemas/Facture' }
+        "422": { description: Consommation invalide ou abonné inexistant }
+
+  /factures/{id}:
+    get:
+      tags: [Factures]
+      summary: Consulter une facture
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Facture trouvée
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:    { $ref: '#/components/schemas/Facture' }
+                  contenu: { type: string, description: "Résumé lisible de la facture" }
+        "404": { description: Facture introuvable }
+
+  /reclamations:
+    post:
+      tags: [Réclamations]
+      summary: Soumettre une réclamation sur une facture
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [facture_id, description]
+              properties:
+                facture_id:  { type: integer, example: 1 }
+                description: { type: string,  example: "Le montant de ma facture est incorrect." }
+      responses:
+        "201":
+          description: Réclamation soumise
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:    { $ref: '#/components/schemas/Reclamation' }
+        "422": { description: Données invalides }
+
+  /reclamations/{id}:
+    put:
+      tags: [Réclamations]
+      summary: Mettre à jour le statut d'une réclamation (gestionnaire)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [statut]
+              properties:
+                statut:  { type: string, enum: [En attente, En cours, Résolue] }
+                reponse: { type: string, example: "Votre réclamation a été traitée." }
+      responses:
+        "200": { description: Réclamation mise à jour }
+        "403": { description: Rôle gestionnaire requis }
+        "404": { description: Réclamation introuvable }
+
+  /statistiques:
+    get:
+      tags: [Statistiques]
+      summary: Statistiques globales (admin uniquement)
+      description: |
+        Retourne :
+        - Factures par ville pour le mois courant
+        - Total facturé par mois sur 12 mois
+        - Répartition des abonnés par type
+      responses:
+        "200":
+          description: Statistiques retournées
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      factures_par_ville_ce_mois: { type: array, items: { type: object } }
+                      factures_par_mois:          { type: array, items: { type: object } }
+                      abonnes_par_type:           { type: array, items: { type: object } }
+        "403": { description: Rôle admin requis }

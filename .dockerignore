@@ -1,0 +1,23 @@
+# .dockerignore — Exclure les fichiers inutiles de l'image Docker
+
+.git
+.github
+.gitignore
+node_modules
+vendor
+storage/logs/*
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/views/*
+bootstrap/cache/*
+*.log
+.env
+.env.*
+!.env.example
+docker-compose*.yml
+Dockerfile
+README.md
+tests/
+phpunit.xml
+.phpunit.cache
+coverage.xml

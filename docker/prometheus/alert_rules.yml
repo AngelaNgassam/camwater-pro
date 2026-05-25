@@ -1,0 +1,93 @@
+groups:
+  - name: camwater_alerts
+    interval: 15s
+    rules:
+
+      # ─────────────────────────────────────────────────────
+      # ALERTES APPLICATION LARAVEL
+      # ─────────────────────────────────────────────────────
+
+      - alert: HighHttpErrorRate
+        expr: rate(camwater_http_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "📊 Taux d'erreur HTTP élevé"
+          description: "Le taux d'erreur HTTP dépasse 10% sur 5 minutes pour {{ $labels.path }}"
+
+      - alert: SlowApiResponse
+        expr: histogram_quantile(0.95, rate(camwater_request_duration_seconds_bucket[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "🐢 Temps de réponse API lent"
+          description: "Le 95e percentile des temps de réponse pour {{ $labels.path }} dépasse 1 seconde"
+
+      - alert: LoginFailuresSpike
+        expr: rate(camwater_auth_login_failures_total[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "🚨 Pics de tentatives de connexion échouées"
+          description: "Plus de 0.5 tentatives échouées par seconde en moyenne (potentiel problème de sécurité)"
+
+      - alert: InvoiceGenerationErrors
+        expr: increase(camwater_invoice_generation_errors_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "⚠️ Erreurs lors de la génération de factures"
+          description: "{{ $value }} erreurs de génération de factures en 5 minutes"
+
+      - alert: NoInvoicesGenerated
+        expr: rate(camwater_action_invoice_created_total[1h]) == 0
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "📋 Aucune facture générée"
+          description: "Aucune facture n'a été générée dans la dernière heure"
+
+      # ─────────────────────────────────────────────────────
+      # ALERTES SYSTÈME
+      # ─────────────────────────────────────────────────────
+
+      - alert: HighCpuUsage
+        expr: 100 - (avg by (instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "🔥 Utilisation CPU élevée"
+          description: "L'utilisation CPU dépasse 80% sur {{ $labels.instance }}"
+
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "💾 Utilisation mémoire élevée"
+          description: "L'utilisation mémoire dépasse 85% sur {{ $labels.instance }}"
+
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes{fstype=~"ext4|xfs"} / node_filesystem_size_bytes) * 100 < 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "💿 Espace disque critique"
+          description: "L'espace disque disponible est inférieur à 10% sur {{ $labels.device }}"
+
+      - alert: PrometheusDown
+        expr: up{job="prometheus"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "🚨 Prometheus inaccessible"
+          description: "Prometheus ne répond pas"

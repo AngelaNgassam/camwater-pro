@@ -1,0 +1,134 @@
+# ============================================================
+# docker-compose.yml — CAMWATER PRO
+# ============================================================
+
+services:
+
+  # ── Application Laravel ────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: camwater_app
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-9000}:80"
+    environment:
+      APP_ENV:       "${APP_ENV:-local}"
+      APP_KEY:       "${APP_KEY}"
+      APP_URL:       "${APP_URL:-http://localhost:9000}"
+      DB_CONNECTION: mysql
+      DB_HOST:       camwater_mysql   # nom du container, pas "mysql"
+      DB_PORT:       3306
+      DB_DATABASE:   "${DB_DATABASE:-camwater_db}"
+      DB_USERNAME:   "${DB_USERNAME:-camwater}"
+      DB_PASSWORD:   "${DB_PASSWORD:-secret}"
+      CACHE_DRIVER:  redis
+      SESSION_DRIVER: redis
+      REDIS_HOST:    camwater_redis   # nom du container, pas "redis"
+      JWT_SECRET:    "${JWT_SECRET}"
+    volumes:
+      - app_storage:/var/www/html/storage
+      - app_logs:/var/www/html/storage/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - camwater_network
+      - monitoring   # pour que Prometheus puisse scraper /prometheus
+
+  # ── MySQL 8 ───────────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: camwater_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "rootsecret"   # OBLIGATOIRE — c'était manquant
+      MYSQL_DATABASE:      "camwater_db"
+      MYSQL_USER:          "camwater_app"     # pas "root", root est réservé
+      MYSQL_PASSWORD:      "MotDePasse123!"
+    ports:
+      - "${DB_PORT_EXPOSED:-3309}:3306"   # 3306 à l'intérieur, pas 3309
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootsecret"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s   # laisse le temps à MySQL de s'initialiser
+    networks:
+      - camwater_network
+
+  # ── Prometheus ────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./docker/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # ── Grafana ───────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - monitoring
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+  # ── Node Exporter ─────────────────────────────────────────
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    ports:
+      - "9100:9100"
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # ── Redis ─────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: camwater_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - camwater_network
+
+volumes:
+  mysql_data:
+  redis_data:
+  app_storage:
+  app_logs:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  camwater_network:
+    driver: bridge
+  monitoring:
+    driver: bridge

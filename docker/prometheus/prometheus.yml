@@ -1,0 +1,32 @@
+global:
+  scrape_interval: 15s      # interroge toutes les 15 secondes
+  evaluation_interval: 15s  # évalue les alertes toutes les 15 secondes
+
+# Configuration des alertes
+rule_files:
+  - '/etc/prometheus/alert_rules.yml'
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []    # À configurer si vous avez Alertmanager
+
+scrape_configs:
+
+  # Prometheus se surveille lui-même
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Votre application Laravel
+  - job_name: 'laravel'
+    static_configs:
+      - targets: ['app:80']   # nom du service docker-compose
+    metrics_path: '/prometheus'  # la route exposée par Spatie Prometheus
+    scrape_interval: 10s      # scrape plus souvent pour l'app
+    scheme: 'http'
+
+  # Métriques système du serveur (CPU, RAM, disque)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']

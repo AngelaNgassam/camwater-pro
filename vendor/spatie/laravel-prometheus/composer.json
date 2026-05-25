@@ -1,0 +1,77 @@
+{
+    "name": "spatie/laravel-prometheus",
+    "description": "Export Laravel metrics to Prometheus",
+    "keywords": [
+        "spatie",
+        "laravel",
+        "laravel-prometheus"
+    ],
+    "homepage": "https://github.com/spatie/laravel-prometheus",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Freek Van der Herten",
+            "email": "freek@spatie.be",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "php": "^8.3",
+        "illuminate/config": "^11.0|^12.0",
+        "illuminate/contracts": "^11.0|^12.0",
+        "illuminate/support": "^11.0|^12.0",
+        "promphp/prometheus_client_php": "^2.7.1",
+        "spatie/laravel-package-tools": "^1.15.0"
+    },
+    "require-dev": {
+        "ext-redis": "*",
+        "laravel/horizon": "^5.28",
+        "laravel/pint": "^1.10",
+        "larastan/larastan": "^3.0",
+        "mockery/mockery": "^1.6",
+        "nunomaduro/collision": "^8.0",
+        "orchestra/testbench": "^9.0|^10.0",
+        "pestphp/pest": "^3.0",
+        "pestphp/pest-plugin-arch": "^3.0",
+        "pestphp/pest-plugin-laravel": "^3.0",
+        "spatie/laravel-ray": "^1.32.4",
+        "spatie/pest-plugin-snapshots": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Spatie\\Prometheus\\": "src/",
+            "Spatie\\Prometheus\\Database\\Factories\\": "database/factories/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Spatie\\Prometheus\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "post-autoload-dump": "@php ./vendor/bin/testbench package:discover --ansi",
+        "analyse": "vendor/bin/phpstan analyse",
+        "test": "vendor/bin/pest",
+        "test-coverage": "vendor/bin/pest --coverage",
+        "format": "vendor/bin/pint"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true,
+            "phpstan/extension-installer": true
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Spatie\\Prometheus\\PrometheusServiceProvider"
+            ],
+            "aliases": {
+                "Prometheus": "Spatie\\Prometheus\\Facades\\Prometheus"
+            }
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}

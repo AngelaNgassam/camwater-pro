@@ -1,0 +1,19 @@
+# ============================================================
+# docker-compose.staging.yml — Surcharge pour l'environnement staging
+#
+# Utilisation :
+#   docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d
+# ============================================================
+
+services:
+  app:
+    build:
+      target: production
+    environment:
+      APP_ENV: staging
+      APP_DEBUG: "false"
+    restart: always
+
+  mysql:
+    restart: always
+    ports: []   # Ne pas exposer MySQL en staging
