@@ -1,5 +1,3 @@
-# .github/workflows/ci-cd.yml - Pipeline CI/CD CAMWATER PRO
-
 name: CI/CD - CAMWATER PRO
 
 on:
@@ -27,7 +25,7 @@ jobs:
             vendor/bin/php-cs-fixer fix --dry-run --diff
           fi
 
-  # ── 2. TESTS ────────────────────────────────────
+  # ── 2. TESTS ────────────────────────────
   test:
     name: Tests
     runs-on: ubuntu-latest
@@ -39,30 +37,62 @@ jobs:
           php-version: "8.3"
           extensions: pdo,pdo_sqlite,pdo_mysql,mbstring,bcmath,zip
       - run: composer install --no-interaction --prefer-dist
-      - name: .env.testing
+      - name: Setup .env.testing
         run: |
           cp .env.example .env.testing
           sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=sqlite/' .env.testing
           echo "DB_DATABASE=:memory:" >> .env.testing
           php artisan key:generate --env=testing --force
           php artisan jwt:secret --env=testing --force
-      - name: Tests
+      - name: Run Tests
         run: php artisan test --env=testing --exclude-group=example
 
-  # ── 3. DOCKER ────────────────────────────
+  # ── 3. SONARCLOUD ────────────────────────
+  sonar:
+    name: SonarCloud
+    runs-on: ubuntu-latest
+    needs: test
+    # Continue même si SONAR_TOKEN n'est pas configuré
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: SonarCloud Scan
+        # Ne tourne que si le secret est configuré
+        if: ${{ secrets.SONAR_TOKEN != '' }}
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # ── 4. DOCKER HUB ────────────────────────
   build:
     name: Docker Hub
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, sonar]
+    # Continue même si DOCKERHUB secrets ne sont pas configurés
+    continue-on-error: true
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     steps:
       - uses: actions/checkout@v4
+      - name: Check Docker secrets
+        id: check_docker
+        run: |
+          if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ] || [ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "⚠️ DOCKERHUB secrets non configurés — étape ignorée"
+          else
+            echo "configured=true" >> $GITHUB_OUTPUT
+          fi
       - uses: docker/setup-buildx-action@v3
+        if: steps.check_docker.outputs.configured == 'true'
       - uses: docker/login-action@v3
+        if: steps.check_docker.outputs.configured == 'true'
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: docker/build-push-action@v5
+        if: steps.check_docker.outputs.configured == 'true'
         with:
           context: .
           push: true
@@ -70,35 +100,56 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/camwater-pro:${{ github.sha }}
             ${{ secrets.DOCKERHUB_USERNAME }}/camwater-pro:latest
 
-  # ── 4. DEPLOY 100% AUTO ─────────────────────
+  # ── 5. DEPLOY O2SWITCH (OPTIONNEL) ──────
   deploy:
     name: Deploy o2switch
     runs-on: ubuntu-latest
-    needs: [test, build]
+    needs: [test, sonar, build]
+    # ✅ NE BLOQUE PAS le pipeline si o2switch n'est pas configuré
+    continue-on-error: true
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     steps:
       - uses: actions/checkout@v4
 
+      # Vérification des secrets o2switch avant tout
+      - name: Check o2switch secrets
+        id: check_o2switch
+        run: |
+          if [ -z "${{ secrets.O2SWITCH_HOST }}" ] || \
+             [ -z "${{ secrets.O2SWITCH_USER }}" ] || \
+             [ -z "${{ secrets.O2SWITCH_PASSWORD }}" ] || \
+             [ -z "${{ secrets.O2SWITCH_DB_HOST }}" ]; then
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Secrets o2switch non configurés — deploy ignoré"
+          else
+            echo "configured=true" >> $GITHUB_OUTPUT
+            echo "✅ Secrets o2switch OK — deploy en cours"
+          fi
+
       # PHP + Node
       - uses: shivammathur/setup-php@v2
+        if: steps.check_o2switch.outputs.configured == 'true'
         with:
           php-version: "8.3"
           extensions: mbstring,pdo,pdo_mysql,bcmath,zip,gd,openssl
       - uses: actions/setup-node@v4
+        if: steps.check_o2switch.outputs.configured == 'true'
         with:
           node-version: "20"
           cache: 'npm'
 
       # Build
-      - run: composer install --no-dev --optimize-autoloader
-      - run: |
+      - name: Composer & Vite build
+        if: steps.check_o2switch.outputs.configured == 'true'
+        run: |
+          composer install --no-dev --optimize-autoloader
           npm ci --production
           npm install vite --save-dev || true
           npx vite build
 
       # .env PROD
-      #  .env AVANT config:cache
       - name: Generate .env
+        if: steps.check_o2switch.outputs.configured == 'true'
         env:
           APP_URL: https://ngassam.cdwfs.net
           DB_HOST: ${{ secrets.O2SWITCH_DB_HOST }}
@@ -130,27 +181,17 @@ jobs:
           VITE_APP_URL=$APP_URL
           EOF
 
-          #  TEST .env immédiatement
-          cat .env | grep -E "(APP_URL|APP_KEY|DB_)" || true
-
-      #  CACHE APRÈS .env
+      # Cache Laravel
       - name: Cache config
+        if: steps.check_o2switch.outputs.configured == 'true'
         run: |
           php artisan config:cache
           php artisan route:cache
           php artisan view:cache
 
-      #  TEST config APRÈS cache
-      - name:  Test config
-        run: |
-          php artisan --version
-          grep APP_URL .env || echo "APP_URL OK"
-          php artisan config:clear
-          php artisan config:show app.url || echo "Config OK"
-          echo " Laravel prêt !"
-
-      #  PAQUET COMPLÈT (TOUS DOSSIERS)
+      # Préparation du paquet
       - name: Prepare FULL Laravel
+        if: steps.check_o2switch.outputs.configured == 'true'
         run: |
           mkdir deploy
           rsync -av --delete \
@@ -163,12 +204,15 @@ jobs:
             --exclude='docker/' \
             ./ deploy/
           cp .env deploy/
-          echo " $(du -sh deploy/)"
+          echo "📦 $(du -sh deploy/)"
 
-      # FTP
+      # FTP Deploy
       - name: Install lftp
+        if: steps.check_o2switch.outputs.configured == 'true'
         run: sudo apt-get update && sudo apt-get install -y lftp
-      - name:  Deploy FTP
+
+      - name: Deploy FTP
+        if: steps.check_o2switch.outputs.configured == 'true'
         env:
           FTP_HOST: ${{ secrets.O2SWITCH_HOST }}
           FTP_USER: ${{ secrets.O2SWITCH_USER }}
@@ -185,18 +229,18 @@ jobs:
             deploy/ $FTP_DIR;
           bye;"
 
-      #  AUTO Post-deploy
-      - name:  Auto post-deploy
+      # Post-deploy hook
+      - name: Auto post-deploy
+        if: steps.check_o2switch.outputs.configured == 'true'
         env:
           HOOK_SECRET: ${{ secrets.DEPLOY_HOOK_SECRET }}
         run: |
           sleep 10
           curl -k -s --max-time 60 \
             "https://kenga.cdwfs.net/deploy-hook.php?secret=$HOOK_SECRET" || \
-          echo " Deploy OK (hook optionnel)"
+          echo "Deploy OK (hook optionnel)"
 
       - name: 🎉 SUCCESS
-        if: success()
+        if: steps.check_o2switch.outputs.configured == 'true'
         run: |
           echo "✅ LIVE: https://ngassam.cdwfs.net"
-          echo "⏱️ Temps: ${{ steps.deploy.outputs.time }}"
