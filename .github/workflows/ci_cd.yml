@@ -52,15 +52,28 @@ jobs:
     name: SonarCloud
     runs-on: ubuntu-latest
     needs: test
-    # Continue même si SONAR_TOKEN n'est pas configuré
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # ✅ SOLUTION : passer le secret en env var, puis tester avec bash
+      - name: Check SONAR_TOKEN
+        id: check_sonar
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -z "$SONAR_TOKEN" ]; then
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "⚠️ SONAR_TOKEN non configuré — SonarCloud ignoré"
+          else
+            echo "configured=true" >> $GITHUB_OUTPUT
+            echo "✅ SONAR_TOKEN trouvé — scan en cours"
+          fi
+
       - name: SonarCloud Scan
-        # Ne tourne que si le secret est configuré
-        if: ${{ secrets.SONAR_TOKEN != '' }}
+        if: steps.check_sonar.outputs.configured == 'true'
         uses: SonarSource/sonarqube-scan-action@v5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

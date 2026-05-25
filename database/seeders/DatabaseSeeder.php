@@ -25,17 +25,17 @@ class DatabaseSeeder extends Seeder
     {
         // ── Opérateur admin ───────────────────────────────────────────────
         Operateur::create([
-            'nom'      => 'KENGA',
-            'prenom'   => 'Brandon',
+            'nom'      => 'NGASSAM',
+            'prenom'   => 'Angela',
             'login'    => 'admin@camwater.cm',
-            'password' => 'Admin123!', 
+            'password' => 'Admin123!',
             'role'     => 'admin',
         ]);
         Operateur::create([
-            'nom'      => 'MBENGUE',
-            'prenom'   => 'Yoan',
-            'login'    => 'YoanN@camwater.cm',
-            'password' => 'Admin123!', 
+            'nom'      => 'NGASSAM',
+            'prenom'   => 'Danielle',
+            'login'    => 'DanielleN@camwater.cm',
+            'password' => 'Admin123!',
             'role'     => 'gestionnaire',
         ]);
 
